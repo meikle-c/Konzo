@@ -1,0 +1,222 @@
+---
+title: "LuminolData"
+author: "Cameron Meikle"
+date: "2024-10-13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Library packages and set the knitr
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Change working directory here
+knitr::opts_chunk$set(root.dir = "/Users/cameronmeikle/Desktop/UNR_RA_position/Projects/Konzo")
+
+
+
+library(knitr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(ggpubr)
+
+wd <- getwd()
+```
+
+
+Download and clean the datafile
+
+13Oct2024 - Data is currently not manipulated in any way except for getting rid of the Dave samples 
+
+```{r Datafile cleanup, echo=FALSE}
+#Luminol Data
+luminol_data <- read.csv(paste(wd,"/Luminol_field_data.csv", sep = ""))
+#SubjectID_Data
+Subject_ID_Data <- read.csv(paste(wd, "/KBS EDTA tube records_v1.csv", sep = ""))
+
+#Clean the Subject_ID_Data and combine to dataframes
+Subject_ID_Data <- Subject_ID_Data %>% rename(Subject_Barcode = Subject.Barcode, 
+                                              Sample_Type = Sample.Type) %>% select(Subject_Barcode,Sample_Type) %>% filter(Sample_Type != "Cassava Pit H2O") %>%
+  filter(Sample_Type != "DRM CONTROL")
+
+```
+
+
+```{r Datafile cleanup2, echo=FALSE}
+#Resolve duplication problem
+Subject_ID_Data <- Subject_ID_Data %>% distinct(Subject_Barcode, .keep_all = TRUE)
+
+#gives you the mean value between the two replicates for the luminol data
+luminol_data2 <- luminol_data %>% 
+  group_by(Subject.ID) %>% 
+  summarize(
+    `10` = mean(`X10.minutes`, na.rm = TRUE),
+    `12.5` = mean(`X12.5.minutes`, na.rm = TRUE), 
+    `15` = mean(`X15.minutes`, na.rm = TRUE),
+    across(c(Location, Date), first)
+  )
+#Change naming conventions of data
+luminol_data <- luminol_data %>% rename( "15" = X15.minutes, "12.5" = X12.5.minutes,  "10" = X10.minutes)
+
+#Filter out Dave Data
+clean_luminol_data <- luminol_data2 %>% filter(Subject.ID != "Dave")
+
+#Add Subject IDs
+clean_luminol_data <- merge(clean_luminol_data, Subject_ID_Data, by.x = "Subject.ID", by.y = "Subject_Barcode")
+
+
+Dave_Controls <- luminol_data %>% filter(Subject.ID == "Dave") %>% select(Subject.ID, Location, Date, Page, '10', '12.5', '15')
+
+kable(Dave_Controls, caption = "Dave Controls")
+
+```
+
+
+Create basic histogram plots of the data
+```{r overall histogram, echo=FALSE, warning=FALSE}
+data_by_timepoint <- clean_luminol_data %>% pivot_longer( cols = c("10", "15", "12.5"), names_to = "Timepoint", values_to = "RFU")
+
+#Overall histogram of values
+
+ggplot(data_by_timepoint, aes(x = RFU, fill = Timepoint)) +
+  geom_histogram(bins = 100) +
+  labs(title = "Overall Histogram") +
+  theme_minimal()
+
+#Histogram by timepoint
+
+unique_timepoints <- (c("10", "12.5", "15"))
+for (timepoint in unique_timepoints) {
+  df <- data_by_timepoint %>% filter(Timepoint == timepoint)
+  
+  histogram_plot <- ggplot(df, aes(x = RFU)) +
+    geom_histogram(bins = 50) +
+    labs(title = paste("Timepoint", timepoint, "minutes")) +
+    theme_minimal()
+  
+  print(histogram_plot)
+}
+
+```
+
+Create basic box plots of the data split by timepoint
+
+```{r timepoint box plot, echo=FALSE, warning=FALSE}
+
+ggplot(data_by_timepoint, aes(x = Timepoint, y = RFU)) +
+  geom_boxplot() +
+  stat_compare_means(method = "anova") +
+  theme_minimal()
+
+```
+
+
+Based on the above graph, I think it is okay to say that we will restrict to minute 15 for the long term analysis. I kept everything in loops that include all timepoints at the moment but that can easily be changed.
+
+I then break down the spread by location. Theoretically all locations should look similar. However, there is 
+```{r, warnings=FALSE, message=FALSE, echo=FALSE}
+
+for (timepoint in unique_timepoints) {
+  df <- data_by_timepoint %>% filter(Timepoint == timepoint)
+  
+  box_plot <- ggplot(df, aes(x = Location, y = RFU)) +
+  geom_boxplot() +
+    labs(title = paste("Timepoint", timepoint, "Minutes")) +
+    stat_compare_means(method = "anova") +
+    theme_minimal()
+  
+  print(box_plot)
+  
+  anova <- aov(RFU ~ Location, df)
+  
+  print(summary(anova))
+  
+}
+
+SamplesPerLocation <- clean_luminol_data %>% count(Location)
+kable(SamplesPerLocation, caption = "Samples per location")
+```
+
+
+Boxplot comparing the controls versus diseased
+
+```{r, warnings=FALSE, message=FALSE, echo=FALSE}
+#Overall graphic
+ggplot(data_by_timepoint, aes(x = Sample_Type, y = RFU)) +
+  geom_boxplot() +
+  stat_compare_means(method = "t.test") +
+  theme_minimal()
+
+#Split by timepoint
+for (timepoint in unique_timepoints) {
+  df <- data_by_timepoint %>% filter(Timepoint == timepoint)
+  
+  box_plot <- ggplot(df, aes(x = Sample_Type, y = RFU)) +
+  geom_boxplot() +
+  labs(title = paste("Timepoint", timepoint, "Minutes")) +
+  stat_compare_means(method = "t.test") +
+    theme_minimal()
+
+  
+  print(box_plot)
+}
+
+SamplesPerStatus <- clean_luminol_data %>% count(Sample_Type)
+kable(SamplesPerStatus, caption = "Samples per Disease Status")
+
+```
+
+Since the above is significant, we are going to do the analysis on the 15 minute timepoint and split by location
+
+
+
+
+
+
+
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+unique_locations <- unique(data_by_timepoint$Location)
+
+for (location in unique_locations) {
+  df <- data_by_timepoint %>% filter(Timepoint == "15") %>% filter(Location == location)
+  
+  box_plot <- ggplot(df, aes(x = Sample_Type, y = RFU)) +
+  geom_boxplot() +
+  labs(title = paste("15 Minute Timepoint at", location)) +
+  stat_compare_means(method = "t.test") +
+    theme_minimal()
+  
+  print(box_plot)
+  
+  samples_df <- clean_luminol_data %>% filter(Location == location)
+  SamplesPerStatus <- samples_df %>% count(Sample_Type)
+  print(kable(SamplesPerStatus, caption = paste("Samples per Disease Status at", location)))
+  
+}
+
+```
+
+
+
+
+
+
+
+
+
+Future things to do:
+-Figure out how to print the KNITR better (one page per graph with information)
+-Look at differences between controls between villages (ANOVA) and then possibly a post-hoc (ttest)
+-Think about possible "batch effect" problems
+
+Once we have the correct data
+-Check age as confounder
+-Do analysis on stage
+-Do analysis on recency
+
+
+
