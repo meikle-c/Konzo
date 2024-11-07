@@ -35,6 +35,8 @@ luminol_data <- read.csv(paste(wd,"/Luminol_field_data.csv", sep = ""))
 #SubjectID_Data
 Subject_ID_Data <- read.csv(paste(wd, "/KBS EDTA tube records_v1.csv", sep = ""))
 
+metadata <- read.csv(paste(wd, "/KBS_Exam_metadata_V2.csv", sep = ""))
+
 #Clean the Subject_ID_Data and combine to dataframes
 Subject_ID_Data <- Subject_ID_Data %>% rename(Subject_Barcode = Subject.Barcode, 
                                               Sample_Type = Sample.Type) %>% select(Subject_Barcode,Sample_Type) %>% filter(Sample_Type != "Cassava Pit H2O") %>%
@@ -64,6 +66,12 @@ clean_luminol_data <- luminol_data2 %>% filter(Subject.ID != "Dave")
 
 #Add Subject IDs
 clean_luminol_data <- merge(clean_luminol_data, Subject_ID_Data, by.x = "Subject.ID", by.y = "Subject_Barcode")
+
+#Add in Metadata - kept original Sample Type - can easily change by deselecting Sample_Type.y for Sample_Type.x
+clean_luminol_data <- merge(clean_luminol_data, metadata, by = "Subject.ID") %>% select(-Sample_Type.y, -X, -Notes) %>% rename(Sample_Type = Sample_Type.x)
+
+#Make sure severity is a factor and not a numerical value for downstream analysis
+clean_luminol_data$Severity <- as.factor(clean_luminol_data$Severity)
 
 
 Dave_Controls <- luminol_data %>% filter(Subject.ID == "Dave") %>% select(Subject.ID, Location, Date, Page, '10', '12.5', '15')
@@ -170,13 +178,6 @@ kable(SamplesPerStatus, caption = "Samples per Disease Status")
 Since the above is significant, we are going to do the analysis on the 15 minute timepoint and split by location
 
 
-
-
-
-
-
-
-
 ```{r, echo=FALSE, warning=FALSE, message=FALSE}
 unique_locations <- unique(data_by_timepoint$Location)
 
@@ -202,6 +203,107 @@ for (location in unique_locations) {
 
 
 
+We now have a rough draft csv of the metadata. These were added to the first block of code on 7Nov2024.
+The first thing to do is to look at the age distribution between groups and then do a correlation between RFU and age to test for age as a confounder.
+
+```{r, ageinfo, echo=FALSE, warning=FALSE, message=FALSE}
+#Restrict to only the 15 minute timepoint
+FifteenMinutedataframe <- data_by_timepoint %>% filter(Timepoint == "15")
+
+#Colored histogram 
+ggplot(FifteenMinutedataframe, aes(x = Age, fill = Sample_Type)) +
+  geom_histogram(bins = 30) +
+  theme_minimal()
+
+Sample_Types <- unique(FifteenMinutedataframe$Sample_Type)
+
+for (status in Sample_Types) {
+  df <- FifteenMinutedataframe %>% filter (Sample_Type == status)
+  
+  agehistogram <- ggplot(df, aes(x = Age)) +
+    geom_histogram(bins = 23) +
+    theme_minimal() +
+    labs(title = paste("Age distribution for", status, "subjects"))
+  
+  print(agehistogram)
+  
+}
+
+ggplot(FifteenMinutedataframe, aes(y = Age, x = Sample_Type)) +
+  geom_boxplot() +
+  stat_compare_means(method = "t.test") +
+  theme_minimal()
+
+
+```
+
+The overall distribution looks overall normal and is fairly even between Konzo and Control. There is no significant difference between age in the control versus Konzo.
+
+The next set of code will make a bi-axial plot between Age and RFU for the entire cohort, and both Konzo/Control broken up. And calculate an R value. If age is not a confounder, then we would expect R to not be significant.
+
+```{r, ageinfopt2 , echo=FALSE, warning=FALSE, message=FALSE}
+
+#Makes a basic biaxial plot comparing RFU to Age
+ggplot(FifteenMinutedataframe, aes(x = Age, y = RFU)) +
+  geom_point() +
+  stat_cor(method = "pearson", label.x = 5, label.y = max(FifteenMinutedataframe$RFU, na.rm = TRUE)) +
+  theme_minimal()
+
+#Splits up the above into Konzo versus Control
+for (status in Sample_Types) {
+  df <- FifteenMinutedataframe %>% filter (Sample_Type == status)
+  
+  agebiaxialplot <- ggplot(df, aes(x = Age, y = RFU)) +
+    geom_point() +
+    stat_cor(method = "pearson", label.x = 5, label.y = max(FifteenMinutedataframe$RFU, na.rm = TRUE)) +
+    theme_minimal() +
+    labs(title = paste("Biaxial Age versus RFU plot for", status, "subjects"))
+  
+  print(agebiaxialplot)
+  
+}
+
+```
+
+Biaxial plot relating RFU to Age is signficant and decreasing. This may be skewed by older children being older cases. Argument that younger people have higher RFU is refuted by control group.
+
+
+
+This next set of boxplots look at the severity. Controls will be included on the graphs. However, excluded from the ANOVA for significance. All analysis will be done on the 15 minute timepoint.
+
+```{r, severity,echo=FALSE, warning=FALSE, message=FALSE}
+#Make an overall boxplot by severity
+ggplot(FifteenMinutedataframe, aes(x = Severity, y = RFU)) +
+  geom_boxplot() +
+  stat_compare_means(method = "anova") +
+  theme_minimal()
+
+SamplesPerSeverity <- clean_luminol_data %>% count(Severity)
+kable(SamplesPerSeverity, caption = "Samples per Severity")
+
+for (status in Sample_Types) {
+  df <- FifteenMinutedataframe %>% filter (Sample_Type == status)
+  
+ statusboxplot <- ggplot(df, aes(x = Severity, y = RFU)) +
+    geom_boxplot() +
+    stat_compare_means(method = "anova") +
+    stat_compare_means(method = "t.test", 
+                     comparisons = list(c("Mild", "Moderate"), 
+                                        c("Mild", "Severe"), 
+                                        c("Moderate", "Severe")), 
+                     label = "p.signif") +
+    theme_minimal()
+
+ 
+  print(statusboxplot)
+
+  SamplesPerSeverity <- df %>% count(Severity)
+  print(kable(SamplesPerSeverity, caption = paste("Samples per Severity for", status, "Subjects")))
+  
+}
+
+
+```
 
 
 
@@ -212,9 +314,7 @@ Future things to do:
 -Look at differences between controls between villages (ANOVA) and then possibly a post-hoc (ttest)
 -Think about possible "batch effect" problems
 
-Once we have the correct data
--Check age as confounder
--Do analysis on stage
+-Go through and bin/subsample age groups. Bootstrap to increase statistical power.
 -Do analysis on recency
 
 
