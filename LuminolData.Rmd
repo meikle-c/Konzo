@@ -505,7 +505,7 @@ cat("Standard deviation of bootstrap p-values:", p_value_sd_sex, "\n")
 hist(bootstrap_results_sex, main = "Distribution of Bootstrap p-values", xlab = "p-value")
 
 ```
-The p-values when controlling for the relative size of the Konzo/Control populations by subsampling is still signficant. 
+The p-values when controlling for the relative size of the Konzo/Control distribution by subsampling is still significant. 
 
 
 
