@@ -20,6 +20,7 @@ library(dplyr)
 library(ggplot2)
 library(readr)
 library(ggpubr)
+library(purrr)
 
 wd <- getwd()
 ```
@@ -56,7 +57,7 @@ luminol_data2 <- luminol_data %>%
     `10` = mean(`X10.minutes`, na.rm = TRUE),
     `12.5` = mean(`X12.5.minutes`, na.rm = TRUE), 
     `15` = mean(`X15.minutes`, na.rm = TRUE),
-    across(c(Location, Date), first)
+    across(c(Location, Date, Order), first)
   )
 #Change naming conventions of data
 luminol_data <- luminol_data %>% rename( "15" = X15.minutes, "12.5" = X12.5.minutes,  "10" = X10.minutes)
@@ -267,11 +268,96 @@ for (status in Sample_Types) {
 
 Biaxial plot relating RFU to Age is signficant and decreasing. This may be skewed by older children being older cases. Argument that younger people have higher RFU is refuted by control group.
 
+Just to double check that age isn't a problem, we are going to subsample the healthy and Konzo subjects and then run a t-test between the subsample. I will bootstrap this x number of times and then look at a distribution of p-values. This should give us a clear answer on whether or not age is too large of a confounder for the luminol test. 
+
+```{r, agebinning and bootstrap, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Define parameters
+n_bootstrap <- 100  # Number of bootstrap samples
+
+#Creates age groups
+FifteenMinutedataframe_agegrouped <- FifteenMinutedataframe %>%
+  mutate(age_group = cut(Age, breaks = seq(min(Age), 22, by = 3), include.lowest = TRUE)) %>%
+  filter(Age < 20)
+
+
+#Figures out the minimum number of individuals for each group that can be pulled/pairs them
+min_group_size_per_age <- FifteenMinutedataframe_agegrouped %>%
+  group_by(age_group, Sample_Type) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(age_group) %>%
+  summarise(min_count = min(count), .groups = "drop")
+
+age_groups <- unique(min_group_size_per_age$age_group)
+
+bootstrap_ttest <- function(data, min_counts) {
+  
+  subsampled_data <- data.frame()
+  
+  for (disease_status in Sample_Types) {
+    for (age_profile in age_groups) {
+      
+      number_of_samples <- min_counts$min_count[which(min_counts$age_group == age_profile)]
+      df <- data.frame()
+      
+      df <- data %>%
+        filter(Sample_Type == disease_status) %>%
+        filter(age_group == age_profile) %>%
+        slice_sample(n = number_of_samples)
+
+      subsampled_data <- rbind(subsampled_data, df)
+    }
+  }
+
+    # Perform t-test
+  t_test_result <- t.test(RFU ~ Sample_Type, data = subsampled_data)
+  return(t_test_result$p.value)  # Return the p-value
+}
+
+
+# Run the bootstrapping with balanced sampling
+bootstrap_results <- replicate(n_bootstrap, bootstrap_ttest(FifteenMinutedataframe_agegrouped, min_group_size_per_age), simplify = TRUE)
+
+# Summarize bootstrap results
+p_value_mean <- mean(bootstrap_results)  # Mean of p-values
+p_value_sd <- sd(bootstrap_results)  # Standard deviation of p-values
+
+# Print results
+cat("Mean of bootstrap p-values:", p_value_mean, "\n")
+cat("Standard deviation of bootstrap p-values:", p_value_sd, "\n")
+
+# Optional: Plot the distribution of bootstrap p-values
+hist(bootstrap_results, main = "Distribution of Bootstrap p-values", xlab = "p-value")
+
+```
+
+The next relevant thing to check is the order. I can do this by checking the order by splitting up village. I should look to see if there is a trend for Konzo and Control separately.
+
+
+```{r, order by village, echo=FALSE, warning=FALSE, message=FALSE}
+
+for (status in Sample_Types) {
+  
+  df <- FifteenMinutedataframe %>% filter(Sample_Type == status)
+  
+  orderplot <- ggplot(df, aes(x = Order, y = RFU)) +
+    geom_point() +
+    labs(title = paste("status by order for", status, "subjects")) +
+    stat_cor(method = "pearson", label.x = 5, label.y = max(df$RFU, na.rm = TRUE)) +
+    theme_minimal()
+  
+  print(orderplot)
+  
+}
+
+
+```
+
 
 
 This next set of boxplots look at the severity. Controls will be included on the graphs. However, excluded from the ANOVA for significance. All analysis will be done on the 15 minute timepoint.
 
-```{r, severity,echo=FALSE, warning=FALSE, message=FALSE}
+```{r severity,echo=FALSE, warning=FALSE, message=FALSE}
 #Make an overall boxplot by severity
 ggplot(FifteenMinutedataframe, aes(x = Severity, y = RFU)) +
   geom_boxplot() +
@@ -306,6 +392,47 @@ for (status in Sample_Types) {
 ```
 
 
+A last analysis by sex
+
+```{r sex, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Filter data for NAs
+FilteredDataSex <- FifteenMinutedataframe %>% filter(!is.na(Sex))
+
+
+ggplot(FilteredDataSex, aes(x = Sex, y = RFU)) +
+  geom_boxplot() +
+  stat_compare_means(method = "anova") +
+  stat_compare_means(method = "t.test", comparisons = c("Male", "Female"), 
+                     label = "p.signif") +
+  theme_minimal()
+
+  SamplesPerSex <- FifteenMinutedataframe %>% count(Sex)
+  print(kable(SamplesPerSex, caption = "Samples per Sex"))
+  
+unique_sex <- unique(FilteredDataSex$Sex)
+
+for (sex in unique_sex) {
+  df <- FilteredDataSex %>% filter( Sex == sex)
+  
+  PlotbySex <- ggplot(df, aes(x = Sample_Type, y = RFU)) +
+    geom_boxplot() +
+    stat_compare_means(method = "t.test") +
+    labs(title = paste("Boxplot by sex for", sex, "subjects")) +
+    theme_minimal()
+  
+  print(PlotbySex)
+  
+  SamplePerSex2 <- df %>% count(Sample_Type)
+  print(kable(SamplePerSex2, caption = paste("Samples per Sex for", sex, "subject" )))
+  
+}
+  
+
+```
+
+
+
 
 
 
@@ -314,8 +441,5 @@ Future things to do:
 -Look at differences between controls between villages (ANOVA) and then possibly a post-hoc (ttest)
 -Think about possible "batch effect" problems
 
--Go through and bin/subsample age groups. Bootstrap to increase statistical power.
 -Do analysis on recency
-
-
 
