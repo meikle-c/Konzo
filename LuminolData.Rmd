@@ -418,7 +418,7 @@ for (sex in unique_sex) {
   PlotbySex <- ggplot(df, aes(x = Sample_Type, y = RFU)) +
     geom_boxplot() +
     stat_compare_means(method = "t.test") +
-    labs(title = paste("Boxplot by sex for", sex, "subjects")) +
+    labs(title = paste("Boxplot by status for", sex, "subjects")) +
     theme_minimal()
   
   print(PlotbySex)
@@ -427,18 +427,90 @@ for (sex in unique_sex) {
   print(kable(SamplePerSex2, caption = paste("Samples per Sex for", sex, "subject" )))
   
 }
+
+for (status in Sample_Types) {
+  df <- FilteredDataSex %>% filter(Sample_Type == status)
+  
+  PlotbyStatus <- ggplot(df, aes(x = Sex, y = RFU)) +
+    geom_boxplot() +
+    stat_compare_means(method = "t.test") +
+    labs(title = paste("Boxplot by sex for", status, "subjects")) +
+    theme_minimal()
+  
+  print(PlotbyStatus)
+}
+
+#Just checking age difference between Konzo cases by Sex
+FilteredDataSex_Konzo_only <- FilteredDataSex %>% filter (Sample_Type == "Konzo")
+ggplot(FilteredDataSex_Konzo_only, aes(x = Sex, y = Age)) +
+  geom_boxplot() +
+  stat_compare_means(method = "t.test") +
+  theme_minimal()
   
 
 ```
 
 
+Males have a higher basal ROS production and less antioxidant potential than females
+https://pmc.ncbi.nlm.nih.gov/articles/PMC5387169/
+There may be something interesting happening with regards to age and sex. The last graph finds a significant difference in age between males and females with Konzo. The below epidemiological paper aligns with this finding. One possibility is that females are less likely to have a large amount of oxidative stress if they are younger. And once they begin having kids, they have less resilience to oxidative stress. Matt's paper did not have the same finding. But the max age for females was 12 and the average was 9. This may be too young to see the difference.
+https://pubmed.ncbi.nlm.nih.gov/1959159/
 
+
+
+To normalize for sex, I will be doing the same normalization by frequency of sex and then bootstrap the values.
+```{r sexbinning and bootstrap, echo=FALSE, warning=FALSE, message=FALSE}
+# Define parameters
+n_bootstrap <- 500  # Number of bootstrap samples
+
+counts_dataframe_for_sex <- data_frame(min_counts_sex = c( 60, 32), status = c("Control", "Konzo"))
+
+bootstrap_ttest_sex <- function(data, counts) {
+  
+  subsampled_data <- data.frame()
+  
+  for (disease_status in Sample_Types) {
+    for (sex in unique_sex) {
+      
+      number_of_samples <- counts$min_counts_sex[which(counts$status == disease_status)]
+      df <- data.frame()
+      
+      df <- data %>%
+        filter(Sample_Type == disease_status) %>%
+        filter(Sex == sex) %>%
+        slice_sample(n = number_of_samples)
+
+      subsampled_data <- rbind(subsampled_data, df)
+    }
+  }
+
+    # Perform t-test
+  t_test_result <- t.test(RFU ~ Sample_Type, data = subsampled_data)
+  return(t_test_result$p.value)  # Return the p-value
+}
+
+
+# Run the bootstrapping with balanced sampling
+bootstrap_results_sex <- replicate(n_bootstrap, bootstrap_ttest_sex(FilteredDataSex, counts_dataframe_for_sex), simplify = TRUE)
+
+# Summarize bootstrap results
+p_value_mean_sex <- mean(bootstrap_results_sex)  # Mean of p-values
+p_value_sd_sex <- sd(bootstrap_results_sex)  # Standard deviation of p-values
+
+# Print results
+cat("Mean of bootstrap p-values:", p_value_mean_sex, "\n")
+cat("Standard deviation of bootstrap p-values:", p_value_sd_sex, "\n")
+
+# Optional: Plot the distribution of bootstrap p-values
+hist(bootstrap_results_sex, main = "Distribution of Bootstrap p-values", xlab = "p-value")
+
+```
+The p-values when controlling for the relative size of the Konzo/Control populations by subsampling is still signficant. 
 
 
 
 Future things to do:
--Figure out how to print the KNITR better (one page per graph with information)
--Look at differences between controls between villages (ANOVA) and then possibly a post-hoc (ttest)
+-Figure out how to print the KNITR better (one page per graph with information)/include more narrative.
 -Think about possible "batch effect" problems
 
 -Do analysis on recency
